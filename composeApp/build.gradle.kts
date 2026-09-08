@@ -40,7 +40,6 @@ kotlin {
 
     if (isMacOs) {
         listOf(
-            iosX64(),
             iosArm64(),
             iosSimulatorArm64(),
         ).forEach { iosTarget ->
@@ -126,6 +125,79 @@ tasks.matching {
     dependsOn(copyJniIntoDistribution)
 }
 
+fun Exec.withoutXcodeSdkEnvironment() {
+    val cleaned = HashMap(System.getenv()).apply {
+        listOf(
+            "SDKROOT",
+            "IPHONEOS_DEPLOYMENT_TARGET",
+            "EFFECTIVE_PLATFORM_NAME",
+            "PLATFORM_NAME",
+            "CONFIGURATION_BUILD_DIR",
+            "BUILT_PRODUCTS_DIR",
+            "ARCHS",
+            "VALID_ARCHS",
+            "NATIVE_ARCH",
+            "NATIVE_ARCH_ACTUAL",
+            "LLVM_TARGET_TRIPLE_OS_VERSION",
+            "DEPLOYMENT_TARGET_CLANG_ENV_NAME",
+            "DEPLOYMENT_TARGET_CLANG_FLAG_NAME",
+            "DEPLOYMENT_TARGET_CLANG_FLAG_PREFIX",
+            "APPLE_SDK_PLATFORM",
+            "APPLE_SDK_VERSION_OVERRIDE",
+        ).forEach(::remove)
+    }
+    environment = cleaned
+}
+
+fun isXcodeIosBuild(): Boolean {
+    val platform = System.getenv("PLATFORM_NAME").orEmpty()
+    val sdkRoot = System.getenv("SDKROOT").orEmpty()
+    return platform.contains("iphone", ignoreCase = true) ||
+        sdkRoot.contains("iPhone", ignoreCase = true)
+}
+
+fun Task.isGgwaveNativeProducer(): Boolean =
+    name.startsWith("buildGGWave") ||
+        name.startsWith("configureGgwave") ||
+        name.startsWith("buildGgwave") ||
+        name.startsWith("copyGgwave") ||
+        name.startsWith("compileGgwave") ||
+        name.startsWith("archiveGgwave") ||
+        name.startsWith("cleanGgwave")
+
+fun Task.needsJvmGgwave(): Boolean {
+    if (isGgwaveNativeProducer()) return false
+    return name == "run" ||
+        name == "runDistributable" ||
+        name == "runRelease" ||
+        name == "runReleaseDistributable" ||
+        name == "hotRunDesktop" ||
+        name == "hotDevDesktop" ||
+        name == "copyJniIntoDistribution" ||
+        name.startsWith("package") ||
+        name.contains("Desktop", ignoreCase = false) ||
+        name.contains("desktop", ignoreCase = false)
+}
+
+fun Task.needsIosGgwave(): Boolean {
+    if (isGgwaveNativeProducer()) return false
+    return this is CInteropProcess ||
+        name.contains("Ios", ignoreCase = false) ||
+        name.contains("AppleFramework", ignoreCase = false) ||
+        name.contains("iosArm64", ignoreCase = true) ||
+        name.contains("iosSimulator", ignoreCase = true)
+}
+
+fun resolvedIosSdk(): String {
+    val platform = System.getenv("PLATFORM_NAME").orEmpty()
+    val sdkRoot = System.getenv("SDKROOT").orEmpty()
+    return when {
+        platform == "iphoneos" || (sdkRoot.contains("iPhoneOS") && !sdkRoot.contains("Simulator")) ->
+            "iphoneos"
+        else -> "iphonesimulator"
+    }
+}
+
 if (isWindows) {
     val configureGgwaveCmake by tasks.registering(Exec::class) {
         workingDir = file("src/desktopMain")
@@ -147,25 +219,30 @@ if (isWindows) {
         commandLine("cmake", "--build", ".")
     }
 
-    val moveGGwaveLibraryForWindows by tasks.registering(Copy::class) {
+    val copyGgwaveJvmLibrary by tasks.registering(Copy::class) {
         dependsOn(buildGgwaveCmake)
         from(cmakeBuildDir.file("libggwave.dll"))
         into(jniDir)
     }
 
-    tasks.register("buildGGWaveLibrary") {
-        dependsOn(moveGGwaveLibraryForWindows)
+    tasks.register("buildGGWaveJvmLibrary") {
+        group = "build"
+        description = "Build ggwave JNI library for desktop/JVM"
+        dependsOn(copyGgwaveJvmLibrary)
     }
 } else if (isMacOs) {
     val cmake = "/opt/homebrew/bin/cmake"
+    val iosSdk = resolvedIosSdk()
 
     val configureGgwaveCmake by tasks.registering(Exec::class) {
         workingDir = file("src/desktopMain")
+        withoutXcodeSdkEnvironment()
         commandLine(
             cmake, "-G", "Ninja",
             "-DCMAKE_BUILD_TYPE=Release",
             "-DCMAKE_C_COMPILER=clang",
             "-DCMAKE_CXX_COMPILER=clang++",
+            "-DCMAKE_OSX_SYSROOT=macosx",
             "-DCMAKE_APPLE_SILICON_PROCESSOR=arm64",
             "-B", cmakeBuildDir.asFile.absolutePath,
             "-S", ".",
@@ -175,19 +252,27 @@ if (isWindows) {
     val buildGgwaveCmake by tasks.registering(Exec::class) {
         dependsOn(configureGgwaveCmake)
         workingDir = cmakeBuildDir.asFile
+        withoutXcodeSdkEnvironment()
         commandLine(cmake, "--build", ".")
     }
 
-    val copyGgwaveDylib by tasks.registering(Copy::class) {
+    val copyGgwaveJvmLibrary by tasks.registering(Copy::class) {
         dependsOn(buildGgwaveCmake)
         from(cmakeBuildDir.file("libggwave.dylib"))
         into(jniDir)
     }
 
+    tasks.register("buildGGWaveJvmLibrary") {
+        group = "build"
+        description = "Build ggwave JNI dylib for desktop/JVM (macOS)"
+        dependsOn(copyGgwaveJvmLibrary)
+    }
+
     val compileGgwaveResampler by tasks.registering(Exec::class) {
-        dependsOn(copyGgwaveDylib)
+        inputs.file(nativeGgwaveDir.file("resampler.cpp"))
+        outputs.file(nativeGgwaveDir.file("resampler.o"))
         commandLine(
-            "xcrun", "--sdk", "iphonesimulator", "clang++",
+            "xcrun", "--sdk", iosSdk, "clang++",
             "-std=c++11", "-stdlib=libc++", "-c",
             nativeGgwaveDir.file("resampler.cpp").asFile.path,
             "-o", nativeGgwaveDir.file("resampler.o").asFile.path,
@@ -196,8 +281,10 @@ if (isWindows) {
 
     val compileGgwaveCpp by tasks.registering(Exec::class) {
         dependsOn(compileGgwaveResampler)
+        inputs.file(nativeGgwaveDir.file("ggwave.cpp"))
+        outputs.file(nativeGgwaveDir.file("ggwave.o"))
         commandLine(
-            "xcrun", "--sdk", "iphonesimulator", "clang++",
+            "xcrun", "--sdk", iosSdk, "clang++",
             "-std=c++11", "-stdlib=libc++", "-c",
             nativeGgwaveDir.file("ggwave.cpp").asFile.path,
             "-o", nativeGgwaveDir.file("ggwave.o").asFile.path,
@@ -206,9 +293,12 @@ if (isWindows) {
 
     val archiveGgwaveIos by tasks.registering(Exec::class) {
         dependsOn(compileGgwaveCpp)
-        doFirst {
-            staticLibDir.asFile.mkdirs()
-        }
+        inputs.files(
+            nativeGgwaveDir.file("ggwave.o"),
+            nativeGgwaveDir.file("resampler.o"),
+        )
+        outputs.file(staticLibDir.file("libggwave.a"))
+        doFirst { staticLibDir.asFile.mkdirs() }
         commandLine(
             "/usr/bin/libtool", "-static", "-o",
             staticLibDir.file("libggwave.a").asFile.path,
@@ -225,19 +315,36 @@ if (isWindows) {
         )
     }
 
-    tasks.register("buildGGWaveLibrary") {
+    tasks.register("buildGGWaveIosLibrary") {
+        group = "build"
+        description = "Build ggwave static library for iOS cinterop (sdk=$iosSdk)"
         dependsOn(cleanGgwaveIosObjects)
     }
 }
 
-tasks.register("createGGWaveLibrary") {
-    if (isWindows || isMacOs) {
-        dependsOn("buildGGWaveLibrary")
+if (isWindows || isMacOs) {
+    tasks.register("buildGGWaveLibrary") {
+        group = "build"
+        description = "Build ggwave native libs for the current context (JVM and/or iOS)"
+        when {
+            isXcodeIosBuild() && isMacOs -> dependsOn("buildGGWaveIosLibrary")
+            else -> {
+                dependsOn("buildGGWaveJvmLibrary")
+                // Full Mac rebuild including iOS: ./gradlew buildGGWaveLibrary -Pggwave.ios=true
+                if (isMacOs && project.findProperty("ggwave.ios") == "true") {
+                    dependsOn("buildGGWaveIosLibrary")
+                }
+            }
+        }
+    }
+
+    tasks.configureEach {
+        if (needsJvmGgwave()) {
+            dependsOn("buildGGWaveJvmLibrary")
+        }
+        if (isMacOs && needsIosGgwave()) {
+            dependsOn("buildGGWaveIosLibrary")
+        }
     }
 }
 
-if (isMacOs) {
-    tasks.withType<CInteropProcess>().configureEach {
-        dependsOn("createGGWaveLibrary")
-    }
-}
