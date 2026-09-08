@@ -1,39 +1,52 @@
-import org.gradle.internal.os.OperatingSystem
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
-import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.tasks.CInteropProcess
 
 plugins {
     alias(libs.plugins.kotlinMultiplatform)
-    alias(libs.plugins.androidApplication)
+    alias(libs.plugins.androidMultiplatformLibrary)
     alias(libs.plugins.jetbrainsCompose)
     alias(libs.plugins.compose.compiler)
 }
 
+val hostOs = System.getProperty("os.name").orEmpty()
+val isMacOs = hostOs.startsWith("Mac")
+val isWindows = hostOs.startsWith("Windows")
+val hostArch = System.getProperty("os.arch")
+val hostOsFamily = hostOs.split(' ').first()
+val cmakeBuildDir = layout.projectDirectory.dir("cmake/$hostArch/$hostOsFamily")
+val jniDir = layout.projectDirectory.dir("libs/jni")
+val staticLibDir = layout.projectDirectory.dir("libs/static")
+val nativeGgwaveDir = layout.projectDirectory.dir("native/ggwave")
+
 kotlin {
-    @OptIn(ExperimentalKotlinGradlePluginApi::class)
-    compilerOptions {
-        apiVersion.set(org.jetbrains.kotlin.gradle.dsl.KotlinVersion.KOTLIN_2_0)
-    }
+    jvmToolchain(21)
 
     jvm("desktop")
-    androidTarget()
 
-    if(System.getProperty("os.name").equals("Mac OS X")) {
+    android {
+        namespace = "com.example.ggwavekmp.shared"
+        compileSdk = libs.versions.android.compileSdk.get().toInt()
+        minSdk = libs.versions.android.minSdk.get().toInt()
+
+        compilerOptions {
+            jvmTarget.set(JvmTarget.JVM_21)
+        }
+
+        androidResources {
+            enable = true
+        }
+    }
+
+    if (isMacOs) {
         listOf(
             iosX64(),
             iosArm64(),
-            iosSimulatorArm64()
+            iosSimulatorArm64(),
         ).forEach { iosTarget ->
-            iosTarget.compilations {
-                val main by getting {
-                    cinterops {
-                        val nativeLibrary by creating {
-                            defFile(project.file("ggwave.def"))
-                            compilerOpts("-Inative/ggwave/")
-
-                        }
-                    }
-                }
+            iosTarget.compilations.getByName("main").cinterops.create("nativeLibrary") {
+                definitionFile.set(file("ggwave.def"))
+                includeDirs("native/ggwave")
             }
 
             iosTarget.binaries.framework {
@@ -44,91 +57,45 @@ kotlin {
     }
 
     sourceSets {
-        val desktopMain by getting
-
         androidMain.dependencies {
             implementation(libs.compose.ui.tooling.preview)
-            implementation(libs.androidx.activity.compose)
             implementation(libs.kotlinx.coroutines.android)
         }
         commonMain.dependencies {
-            implementation(libs.runtime)
-            implementation(libs.foundation)
-
-            implementation(libs.material3)
-            implementation(libs.material.icons.extended)
-            implementation(libs.ui)
-            implementation(libs.components.resources)
+            implementation(libs.compose.runtime)
+            implementation(libs.compose.foundation)
+            implementation(libs.compose.material3)
+            implementation(libs.compose.material.icons.extended)
+            implementation(libs.compose.ui)
+            implementation(libs.compose.components.resources)
 
             implementation(libs.lifecycle.viewmodel.compose)
             implementation(libs.constraintlayout.compose.multiplatform)
             implementation(libs.material.kolor)
         }
         commonTest.dependencies {
-            implementation(kotlin("test"))
+            implementation(libs.kotlin.test)
         }
-        desktopMain.dependencies {
-            implementation(compose.desktop.currentOs)
-            implementation(libs.kotlinx.coroutines.swing)
+        named("desktopMain") {
+            dependencies {
+                implementation(compose.desktop.currentOs)
+                implementation(libs.kotlinx.coroutines.swing)
+            }
         }
     }
 }
 
-android {
-    namespace = "com.example.ggwavekmp"
-    compileSdk = libs.versions.android.compileSdk.get().toInt()
-
-    sourceSets["main"].manifest.srcFile("src/androidMain/AndroidManifest.xml")
-    sourceSets["main"].res.srcDirs("src/androidMain/res")
-    sourceSets["main"].resources.srcDirs("src/commonMain/resources")
-
-    defaultConfig {
-        applicationId = "com.example.ggwavekmp"
-        minSdk = libs.versions.android.minSdk.get().toInt()
-        targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionCode = 1
-        versionName = "1.0"
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        ndk {
-            // target platforms
-            abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86_64")
-        }
-    }
-    packaging {
-        resources {
-            excludes += "/META-INF/{AL2.0,LGPL2.1}"
-        }
-    }
-    buildTypes {
-        getByName("release") {
-            isMinifyEnabled = false
-        }
-    }
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_21
-        targetCompatibility = JavaVersion.VERSION_21
-    }
-    dependencies {
-        debugImplementation(libs.compose.ui.tooling)
-    }
-    externalNativeBuild {
-        cmake {
-            path = file("src/androidMain/CMakeLists.txt")
-        }
-    }
+dependencies {
+    androidRuntimeClasspath(libs.compose.ui.tooling)
 }
 
 compose.desktop {
     application {
         mainClass = "MainKt"
-        jvmArgs("-Djava.library.path=libs/jni")
+        jvmArgs += listOf("-Djava.library.path=libs/jni")
 
         nativeDistributions {
-            outputBaseDir.set(project.buildDir.resolve("testDistribution"))
-            copy {
-                from("$projectDir/libs/jni/libggwave.dll")
-                into("${project.buildDir}/testDistribution/main/app/ggwaveKMP/libs/jni")
-            }
+            outputBaseDir.set(layout.buildDirectory.dir("testDistribution"))
 
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "ggwaveKMP"
@@ -136,208 +103,141 @@ compose.desktop {
             description = "Compose Example App"
             copyright = "© 2024 Wooram Yang. All rights reserved."
             vendor = "Wooram Yang"
-            modules("java.base")
-            modules("java.desktop")
+            modules("java.base", "java.desktop")
         }
     }
 }
 
-tasks.register("createCmakeDirectoryIfNotExists") {
-    println("Checking if there is a cmake directory...")
-
-    val arch = System.getProperty("os.arch")
-    val os = System.getProperty("os.name").split(' ')[0]
-    val cmakeDirPath = "${projectDir}/cmake/$arch/$os"
-    val cmakeDir = file(cmakeDirPath)
-    if (cmakeDir.exists().not()) {
-        cmakeDir.mkdirs()
-        println("cmake Directory created: $cmakeDir")
-    }
+val copyJniIntoDistribution by tasks.registering(Copy::class) {
+    from(jniDir)
+    include("*.dll", "*.dylib", "*.so")
+    into(layout.buildDirectory.dir("testDistribution/main/app/ggwaveKMP/libs/jni"))
 }
 
-tasks.register("createJniLibraryDirectoryIfNotExists") {
-    dependsOn("createCmakeDirectoryIfNotExists")
-
-    println("Checking if there is a jni library directory...")
-
-    val libraryDirPath = "${projectDir}/libs/jni"
-    val libraryDir = file(libraryDirPath)
-    if (libraryDir.exists().not()) {
-        libraryDir.mkdirs()
-        println("Library Directory created: $libraryDir")
-    }
+tasks.matching {
+    it.name in setOf(
+        "packageDmg",
+        "packageMsi",
+        "packageDeb",
+        "packageDistributionForCurrentOS",
+        "packageUberJarForCurrentOS",
+    )
+}.configureEach {
+    dependsOn(copyJniIntoDistribution)
 }
 
-if (OperatingSystem.current().isWindows) {
-    tasks.register("buildGGWaveLibrary") {
-        dependsOn("moveGGwaveLibraryForWindows")
+if (isWindows) {
+    val configureGgwaveCmake by tasks.registering(Exec::class) {
+        workingDir = file("src/desktopMain")
+        commandLine(
+            "cmake", "-G", "Ninja",
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DCMAKE_C_COMPILER=gcc",
+            "-DCMAKE_CXX_COMPILER=g++",
+            "-DCMAKE_C_COMPILER_TARGET=x86_64-window-gnu",
+            "-DCMAKE_CXX_COMPILER_TARGET=x86_64-window-gnu",
+            "-B", cmakeBuildDir.asFile.absolutePath,
+            "-S", ".",
+        )
     }
 
-    tasks.register("buildGGWaveLibraryForWindows") {
-        val arch = System.getProperty("os.arch")
-        val os = System.getProperty("os.name").split(' ')[0]
-        val buildPath = "${projectDir}/cmake/$arch/$os"
-
-        doLast {
-            println("Executing cmake command...")
-
-            ProcessBuilder(
-                "cmake", "-G", "Ninja",
-                "-DCMAKE_BUILD_TYPE=Release",
-                "-DCMAKE_C_COMPILER=gcc",
-                "-DCMAKE_CXX_COMPILER=g++",
-                "-DCMAKE_C_COMPILER_TARGET=x86_64-window-gnu",
-                "-DCMAKE_CXX_COMPILER_TARGET=x86_64-window-gnu",
-                "-B", buildPath, "-S", "."
-            ).directory(file("src/desktopMain"))
-                .inheritIO()
-                .start()
-                .waitFor()
-
-            println("Executing cmake build command...")
-
-            ProcessBuilder("cmake", "--build", ".")
-                .directory(file(buildPath))
-                .inheritIO()
-                .start()
-                .waitFor()
-        }
+    val buildGgwaveCmake by tasks.registering(Exec::class) {
+        dependsOn(configureGgwaveCmake)
+        workingDir = cmakeBuildDir.asFile
+        commandLine("cmake", "--build", ".")
     }
 
-    tasks.register("moveGGwaveLibraryForWindows") {
-        dependsOn("buildGGWaveLibraryForWindows")
-
-        val libName = "libggwave"
-        val arch = System.getProperty("os.arch")
-        val os = System.getProperty("os.name").split(' ')[0]
-        val buildPath = "${projectDir}/cmake/$arch/$os"
-
-        copy {
-            from("$buildPath/$libName.dll")
-            into("$projectDir/libs/jni")
-        }
-        delete {
-            delete("$buildPath/$libName.dll")
-        }
-    }
-} else if (OperatingSystem.current().isMacOsX) {
-    tasks.register("createStaticLibraryDirectoryIfNotExists") {
-        dependsOn("createJniLibraryDirectoryIfNotExists")
-
-        println("Checking if there is a static library directory...")
-
-        val libraryDirPath = "${projectDir}/libs/static"
-        val libraryDir = file(libraryDirPath)
-        if (libraryDir.exists().not()) {
-            libraryDir.mkdirs()
-            println("Library Directory created: $libraryDir")
-        }
+    val moveGGwaveLibraryForWindows by tasks.registering(Copy::class) {
+        dependsOn(buildGgwaveCmake)
+        from(cmakeBuildDir.file("libggwave.dll"))
+        into(jniDir)
     }
 
     tasks.register("buildGGWaveLibrary") {
-        dependsOn("createGGWaveLibraryForiOS")
+        dependsOn(moveGGwaveLibraryForWindows)
+    }
+} else if (isMacOs) {
+    val cmake = "/opt/homebrew/bin/cmake"
+
+    val configureGgwaveCmake by tasks.registering(Exec::class) {
+        workingDir = file("src/desktopMain")
+        commandLine(
+            cmake, "-G", "Ninja",
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DCMAKE_C_COMPILER=clang",
+            "-DCMAKE_CXX_COMPILER=clang++",
+            "-DCMAKE_APPLE_SILICON_PROCESSOR=arm64",
+            "-B", cmakeBuildDir.asFile.absolutePath,
+            "-S", ".",
+        )
     }
 
-    tasks.register("buildGGWaveLibraryForMacOS") {
-        val arch = System.getProperty("os.arch")
-        val os = System.getProperty("os.name").split(' ')[0]
-        val buildPath = "${projectDir}/cmake/$arch/$os"
-        val cmakePath = "/opt/homebrew/bin/"
-
-        doFirst {
-            println("Executing cmake command...")
-            ProcessBuilder(
-                "${cmakePath}cmake", "-G", "Ninja",
-                "-DCMAKE_BUILD_TYPE=Release",
-                "-DCMAKE_C_COMPILER=clang",
-                "-DCMAKE_CXX_COMPILER=clang++",
-                "-DCMAKE_APPLE_SILICON_PROCESSOR=arm64",
-                "-B", buildPath, "-S", "."
-            ).directory(file("src/desktopMain"))
-                .inheritIO()
-                .start()
-                .waitFor()
-        }
-        doLast {
-            println("Executing cmake build command...")
-            ProcessBuilder("${cmakePath}cmake", "--build", ".")
-                .directory(file(buildPath))
-                .inheritIO()
-                .start()
-                .waitFor()
-        }
+    val buildGgwaveCmake by tasks.registering(Exec::class) {
+        dependsOn(configureGgwaveCmake)
+        workingDir = cmakeBuildDir.asFile
+        commandLine(cmake, "--build", ".")
     }
 
-    tasks.register("clearGGWaveLibraryForMacOS") {
-        dependsOn("buildGGWaveLibraryForMacOS")
-
-        val libName = "libggwave"
-        val arch = System.getProperty("os.arch")
-        val os = System.getProperty("os.name").split(' ')[0]
-        val buildPath = "${projectDir}/cmake/$arch/$os"
-
-        doFirst {
-            println("Moving dynamic library file...")
-            copy {
-                from("$buildPath/$libName.dylib")
-                into("$projectDir/libs/jni")
-            }
-        }
-        doLast {
-            delete {
-                delete("$buildPath/$libName.dylib")
-            }
-        }
+    val copyGgwaveDylib by tasks.registering(Copy::class) {
+        dependsOn(buildGgwaveCmake)
+        from(cmakeBuildDir.file("libggwave.dylib"))
+        into(jniDir)
     }
 
-    tasks.register("createGGWaveLibraryForiOS") {
-        dependsOn("clearGGWaveLibraryForMacOS")
+    val compileGgwaveResampler by tasks.registering(Exec::class) {
+        dependsOn(copyGgwaveDylib)
+        commandLine(
+            "xcrun", "--sdk", "iphonesimulator", "clang++",
+            "-std=c++11", "-stdlib=libc++", "-c",
+            nativeGgwaveDir.file("resampler.cpp").asFile.path,
+            "-o", nativeGgwaveDir.file("resampler.o").asFile.path,
+        )
+    }
 
-        val libName = "libggwave"
-        val nativePath = "${projectDir}/native/ggwave"
-        val libtoolPath = "/usr/bin/"
+    val compileGgwaveCpp by tasks.registering(Exec::class) {
+        dependsOn(compileGgwaveResampler)
+        commandLine(
+            "xcrun", "--sdk", "iphonesimulator", "clang++",
+            "-std=c++11", "-stdlib=libc++", "-c",
+            nativeGgwaveDir.file("ggwave.cpp").asFile.path,
+            "-o", nativeGgwaveDir.file("ggwave.o").asFile.path,
+        )
+    }
 
+    val archiveGgwaveIos by tasks.registering(Exec::class) {
+        dependsOn(compileGgwaveCpp)
         doFirst {
-            println("Building static library for iOS...")
-            ProcessBuilder(
-                "xcrun", "--sdk", "iphonesimulator", "clang++",
-                "-std=c++11", "-stdlib=libc++", "-c", "${nativePath}/resampler.cpp",
-                "-o", "${nativePath}/resampler.o"
-            ).inheritIO().start().waitFor()
+            staticLibDir.asFile.mkdirs()
+        }
+        commandLine(
+            "/usr/bin/libtool", "-static", "-o",
+            staticLibDir.file("libggwave.a").asFile.path,
+            nativeGgwaveDir.file("ggwave.o").asFile.path,
+            nativeGgwaveDir.file("resampler.o").asFile.path,
+        )
+    }
 
-            ProcessBuilder(
-                "xcrun", "--sdk", "iphonesimulator", "clang++",
-                "-std=c++11", "-stdlib=libc++", "-c", "${nativePath}/ggwave.cpp",
-                "-o", "${nativePath}/ggwave.o"
-            ).inheritIO().start().waitFor()
-        }
-        doLast {
-            ProcessBuilder(
-                "${libtoolPath}libtool", "-static", "-o",
-                "$projectDir/libs/static/$libName.a",
-                "${nativePath}/ggwave.o", "${nativePath}/resampler.o"
-            ).inheritIO().start().waitFor()
-            delete {
-                delete(
-                    "${nativePath}/ggwave.o",
-                    "${nativePath}/resampler.o")
-            }
-        }
+    val cleanGgwaveIosObjects by tasks.registering(Delete::class) {
+        dependsOn(archiveGgwaveIos)
+        delete(
+            nativeGgwaveDir.file("ggwave.o"),
+            nativeGgwaveDir.file("resampler.o"),
+        )
+    }
+
+    tasks.register("buildGGWaveLibrary") {
+        dependsOn(cleanGgwaveIosObjects)
     }
 }
 
 tasks.register("createGGWaveLibrary") {
-    if (OperatingSystem.current().isWindows) {
-        dependsOn("createJniLibraryDirectoryIfNotExists")
-    } else if (OperatingSystem.current().isMacOsX) {
-        dependsOn("createStaticLibraryDirectoryIfNotExists")
+    if (isWindows || isMacOs) {
+        dependsOn("buildGGWaveLibrary")
     }
-
-    dependsOn("buildGGWaveLibrary")
 }
 
-if (OperatingSystem.current().isMacOsX) {
-    tasks.named("cinteropNativeLibraryIosArm64") {
+if (isMacOs) {
+    tasks.withType<CInteropProcess>().configureEach {
         dependsOn("createGGWaveLibrary")
     }
 }
