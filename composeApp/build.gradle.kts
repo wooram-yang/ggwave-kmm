@@ -52,12 +52,13 @@ kotlin {
             implementation(libs.kotlinx.coroutines.android)
         }
         commonMain.dependencies {
-            implementation(compose.runtime)
-            implementation(compose.foundation)
+            implementation(libs.runtime)
+            implementation(libs.foundation)
 
-            implementation(compose.material3)
-            implementation(compose.ui)
-            implementation(compose.components.resources)
+            implementation(libs.material3)
+            implementation(libs.material.icons.extended)
+            implementation(libs.ui)
+            implementation(libs.components.resources)
 
             implementation(libs.lifecycle.viewmodel.compose)
             implementation(libs.constraintlayout.compose.multiplatform)
@@ -177,28 +178,29 @@ if (OperatingSystem.current().isWindows) {
         val os = System.getProperty("os.name").split(' ')[0]
         val buildPath = "${projectDir}/cmake/$arch/$os"
 
-        exec {
+        doLast {
             println("Executing cmake command...")
-            setWorkingDir("${projectDir}/src/desktopMain")
-            commandLine(
-                "cmake",
-                "-G",
-                "Ninja",
+
+            ProcessBuilder(
+                "cmake", "-G", "Ninja",
                 "-DCMAKE_BUILD_TYPE=Release",
                 "-DCMAKE_C_COMPILER=gcc",
                 "-DCMAKE_CXX_COMPILER=g++",
                 "-DCMAKE_C_COMPILER_TARGET=x86_64-window-gnu",
                 "-DCMAKE_CXX_COMPILER_TARGET=x86_64-window-gnu",
-                "-B",
-                buildPath,
-                "-S",
-                "."
-            )
-        }
-        println("Executing cmake build command...")
-        exec {
-            setWorkingDir(buildPath)
-            commandLine("cmake", "--build", ".")
+                "-B", buildPath, "-S", "."
+            ).directory(file("src/desktopMain"))
+                .inheritIO()
+                .start()
+                .waitFor()
+
+            println("Executing cmake build command...")
+
+            ProcessBuilder("cmake", "--build", ".")
+                .directory(file(buildPath))
+                .inheritIO()
+                .start()
+                .waitFor()
         }
     }
 
@@ -244,29 +246,25 @@ if (OperatingSystem.current().isWindows) {
 
         doFirst {
             println("Executing cmake command...")
-            exec {
-                setWorkingDir("${projectDir}/src/desktopMain")
-                commandLine(
-                    "${cmakePath}cmake",
-                    "-G",
-                    "Ninja",
-                    "-DCMAKE_BUILD_TYPE=Release",
-                    "-DCMAKE_C_COMPILER=clang",
-                    "-DCMAKE_CXX_COMPILER=clang++",
-                    "-DCMAKE_APPLE_SILICON_PROCESSOR=arm64",
-                    "-B",
-                    buildPath,
-                    "-S",
-                    "."
-                )
-            }
+            ProcessBuilder(
+                "${cmakePath}cmake", "-G", "Ninja",
+                "-DCMAKE_BUILD_TYPE=Release",
+                "-DCMAKE_C_COMPILER=clang",
+                "-DCMAKE_CXX_COMPILER=clang++",
+                "-DCMAKE_APPLE_SILICON_PROCESSOR=arm64",
+                "-B", buildPath, "-S", "."
+            ).directory(file("src/desktopMain"))
+                .inheritIO()
+                .start()
+                .waitFor()
         }
         doLast {
             println("Executing cmake build command...")
-            exec {
-                setWorkingDir(buildPath)
-                commandLine("${cmakePath}cmake", "--build", ".")
-            }
+            ProcessBuilder("${cmakePath}cmake", "--build", ".")
+                .directory(file(buildPath))
+                .inheritIO()
+                .start()
+                .waitFor()
         }
     }
 
@@ -301,46 +299,24 @@ if (OperatingSystem.current().isWindows) {
 
         doFirst {
             println("Building static library for iOS...")
-            exec {
-                commandLine(
-                    "xcrun",
-                    "--sdk",
-                    "iphonesimulator",
-                    "clang++",
-                    "-std=c++11",
-                    "-stdlib=libc++",
-                    "-c",
-                    "${nativePath}/resampler.cpp",
-                    "-o",
-                    "${nativePath}/resampler.o"
-                )
-            }
-            exec {
-                commandLine(
-                    "xcrun",
-                    "--sdk",
-                    "iphonesimulator",
-                    "clang++",
-                    "-std=c++11",
-                    "-stdlib=libc++",
-                    "-c",
-                    "${nativePath}/ggwave.cpp",
-                    "-o",
-                    "${nativePath}/ggwave.o"
-                )
-            }
+            ProcessBuilder(
+                "xcrun", "--sdk", "iphonesimulator", "clang++",
+                "-std=c++11", "-stdlib=libc++", "-c", "${nativePath}/resampler.cpp",
+                "-o", "${nativePath}/resampler.o"
+            ).inheritIO().start().waitFor()
+
+            ProcessBuilder(
+                "xcrun", "--sdk", "iphonesimulator", "clang++",
+                "-std=c++11", "-stdlib=libc++", "-c", "${nativePath}/ggwave.cpp",
+                "-o", "${nativePath}/ggwave.o"
+            ).inheritIO().start().waitFor()
         }
         doLast {
-            exec {
-                commandLine(
-                    "${libtoolPath}libtool",
-                    "-static",
-                    "-o",
-                    "$projectDir/libs/static/$libName.a",
-                    "${nativePath}/ggwave.o",
-                    "${nativePath}/resampler.o"
-                )
-            }
+            ProcessBuilder(
+                "${libtoolPath}libtool", "-static", "-o",
+                "$projectDir/libs/static/$libName.a",
+                "${nativePath}/ggwave.o", "${nativePath}/resampler.o"
+            ).inheritIO().start().waitFor()
             delete {
                 delete(
                     "${nativePath}/ggwave.o",
