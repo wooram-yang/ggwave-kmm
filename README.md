@@ -41,7 +41,7 @@ It consists of a common UI codebase using Compose Multiplatform and three platfo
 
 
 ## Building
-Ensure that you have the necessary configurations to run an Android or iOS app. This was tested in Android Studio Ladybug 2024.2.1 Patch 2.
+Ensure that you have the necessary configurations to run an Android or iOS app. This was tested in Android Studio Panda 4.
 
 ### JVM (Windows, macOS)
 ```
