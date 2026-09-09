@@ -1,10 +1,7 @@
 package com.example.ggwavekmp
 
-import CaptureSoundListener
-import PlaySoundListener
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -26,13 +23,14 @@ object JVMCoreManager: BaseCoreManager {
         ggWave.initNative()
     }
 
+    private const val SAMPLE_RATE = 48000f
+    private const val BUFFER_SIZE = 4 * 1024
+
     private val scope = CoroutineScope(Dispatchers.Default)
 
-    private const val sampleHz = 48000f
     private var encodedDataArray: ShortArray? = null
     private lateinit var clip: Clip
 
-    private const val recordingBufferSize = 4 * 1024
     private var willStopRecording = false
 
 
@@ -47,7 +45,7 @@ object JVMCoreManager: BaseCoreManager {
     override fun capture() {
         scope.launch {
             val audioFormat = AudioFormat(
-                sampleHz,
+                SAMPLE_RATE,
                 16,
                 1,
                 true,
@@ -57,7 +55,7 @@ object JVMCoreManager: BaseCoreManager {
             recordObject.open(audioFormat)
             recordObject.start()
 
-            val byteBuf: ByteBuffer = ByteBuffer.allocate(recordingBufferSize)
+            val byteBuf: ByteBuffer = ByteBuffer.allocate(BUFFER_SIZE)
             val buffer = byteBuf.array()
 
             var totalRead = 0
@@ -98,7 +96,7 @@ object JVMCoreManager: BaseCoreManager {
                 val byteArray = byteBuf.array()
 
                 val audioFormat = AudioFormat(
-                    sampleHz,
+                    SAMPLE_RATE,
                     16,
                     1,
                     true,

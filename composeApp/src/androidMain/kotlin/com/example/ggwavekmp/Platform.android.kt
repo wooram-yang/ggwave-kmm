@@ -1,3 +1,5 @@
+package com.example.ggwavekmp
+
 import android.os.Build
 
 class AndroidPlatform : Platform {

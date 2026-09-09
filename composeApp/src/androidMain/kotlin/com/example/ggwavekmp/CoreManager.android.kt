@@ -1,7 +1,5 @@
 package com.example.ggwavekmp
 
-import CaptureSoundListener
-import PlaySoundListener
 import android.annotation.SuppressLint
 import android.media.AudioFormat
 import android.media.AudioRecord
@@ -11,7 +9,6 @@ import android.media.MediaRecorder
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 object AndroidCoreManager: BaseCoreManager {
@@ -29,15 +26,16 @@ object AndroidCoreManager: BaseCoreManager {
         initAudioRecord()
     }
 
+    private const val SAMPLE_RATE = 48000
+    private const val BUFFER_SIZE = 4 * 1024
+
     private val scope = CoroutineScope(Dispatchers.Default)
 
-    private const val sampleHz = 48000
     private var encodedDataArray: ShortArray? = null
     private lateinit var audioTrack: AudioTrack
 
-    private const val recordingBufferSize = 4 * 1024
     private var willStopRecording = false
-    private var decodedDataArray: ShortArray = ShortArray(recordingBufferSize / 2)
+    private var decodedDataArray: ShortArray = ShortArray(BUFFER_SIZE / 2)
     private lateinit var audioRecord: AudioRecord
 
 
@@ -57,7 +55,7 @@ object AndroidCoreManager: BaseCoreManager {
                 return@launch
             }
 
-            decodedDataArray = ShortArray(recordingBufferSize / 2)
+            decodedDataArray = ShortArray(BUFFER_SIZE / 2)
 
             audioRecord.startRecording()
             var totalRead = 0
@@ -100,8 +98,8 @@ object AndroidCoreManager: BaseCoreManager {
 
                     }
                 )
-                audioTrack.setPositionNotificationPeriod(sampleHz / 30)
-                audioTrack.setNotificationMarkerPosition(it.size)
+                audioTrack.positionNotificationPeriod = SAMPLE_RATE / 30
+                audioTrack.notificationMarkerPosition = it.size
 
                 if(audioTrack.playState != AudioTrack.PLAYSTATE_PLAYING) {
                     audioTrack.play()
@@ -133,7 +131,7 @@ object AndroidCoreManager: BaseCoreManager {
             .setAudioFormat(
                 AudioFormat.Builder()
                     .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                    .setSampleRate(sampleHz)
+                    .setSampleRate(SAMPLE_RATE)
                     .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                     .build()
             )
@@ -145,10 +143,10 @@ object AndroidCoreManager: BaseCoreManager {
     private fun initAudioRecord() {
         audioRecord = AudioRecord(
             MediaRecorder.AudioSource.DEFAULT,
-            sampleHz,
+            SAMPLE_RATE,
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT,
-            recordingBufferSize
+            BUFFER_SIZE
         )
     }
 }

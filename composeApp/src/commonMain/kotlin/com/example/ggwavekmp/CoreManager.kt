@@ -1,7 +1,12 @@
 package com.example.ggwavekmp
 
-import CaptureSoundListener
-import PlaySoundListener
+fun interface PlaySoundListener {
+    fun onPlayEnded()
+}
+
+fun interface CaptureSoundListener {
+    fun onReceivedMessage(value: String)
+}
 
 interface BaseCoreManager {
     var ggWave: GGWave

@@ -69,7 +69,7 @@ kotlin {
             implementation(libs.compose.components.resources)
 
             implementation(libs.lifecycle.viewmodel.compose)
-            implementation(libs.constraintlayout.compose.multiplatform)
+            implementation(libs.lifecycle.runtime.compose)
             implementation(libs.material.kolor)
         }
         commonTest.dependencies {
